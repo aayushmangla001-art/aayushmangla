@@ -199,6 +199,49 @@ function UI.toggle(frame: GuiObject)
 	end
 end
 
+-- ============================ side menu ============================
+-- One column of round menu buttons on the right edge of the screen, shared by
+-- every new feature, so the buttons never overlap each other.
+local sideColumn: Frame? = nil
+local function getSideColumn(): Frame
+	if sideColumn and sideColumn.Parent then
+		return sideColumn
+	end
+	local _, root = UI.screen("SideMenu", 7)
+	local column = Instance.new("Frame")
+	column.Name = "Column"
+	column.BackgroundTransparency = 1
+	column.AnchorPoint = Vector2.new(1, 0.5)
+	column.Position = UDim2.new(1, -12, 0.45, 0)
+	column.Size = UDim2.fromOffset(86, 330)
+	column.Parent = root
+	local layout = Instance.new("UIListLayout")
+	layout.Padding = UDim.new(0, 10)
+	layout.SortOrder = Enum.SortOrder.LayoutOrder
+	layout.VerticalAlignment = Enum.VerticalAlignment.Center
+	layout.Parent = column
+	sideColumn = column
+	return column
+end
+
+-- adds a big round button with an icon and a caption to the side menu
+function UI.sideButton(icon: string, caption: string, color: Color3, order: number, onClick: () -> ()): TextButton
+	local b = UI.button(getSideColumn(), "", color, onClick)
+	b.Size = UDim2.fromOffset(78, 78)
+	b.LayoutOrder = order
+	local corner = b:FindFirstChildOfClass("UICorner")
+	if corner then
+		corner.CornerRadius = UDim.new(0.5, 0)
+	end
+	local label = b:FindFirstChild("Label") :: TextLabel
+	label.Text = icon
+	label.Size = UDim2.new(1, -16, 0.6, 0)
+	label.Position = UDim2.fromOffset(8, 6)
+	local text = UI.label(b, caption, UDim2.new(1, 0, 0.3, 0), UDim2.new(0, 0, 0.64, 0))
+	text.Name = "Caption"
+	return b
+end
+
 -- ============================ text helpers ============================
 function UI.money(n: number): string
 	n = math.floor(n)
