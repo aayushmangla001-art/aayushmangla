@@ -12,10 +12,13 @@
 --    new try: your green tiles reset and can pay again. A tile can't pay the
 --    same player twice within 20 seconds, so nobody can farm the first row.
 --  * Tiles that lead to the side path (toward the cash area) are always safe.
+--  * Breaking a tile or falling tells BridgeState, so the revive script can offer
+--    to put the player back on the last safe tile they reached.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Money = require(script.Parent:WaitForChild("Money"))
+local BridgeState = require(script.Parent:WaitForChild("BridgeState"))
 local remote = ReplicatedStorage:WaitForChild("GlassBridgeRemote")
 
 local REWARD = 100
@@ -96,13 +99,42 @@ for _, row in ipairs(rows) do
 	end
 end
 
+-- share the layout with the revive / bridge-button scripts (server only)
+do
+	local minX, maxX, minZ, maxZ, lowestY = math.huge, -math.huge, math.huge, -math.huge, math.huge
+	for _, row in ipairs(rows) do
+		for _, t in ipairs(row) do
+			minX, maxX = math.min(minX, t.Position.X), math.max(maxX, t.Position.X)
+			minZ, maxZ = math.min(minZ, t.Position.Z), math.max(maxZ, t.Position.Z)
+			lowestY = math.min(lowestY, t.Position.Y)
+			if info[t].correct then table.insert(BridgeState.safeTiles, t) end
+		end
+	end
+	BridgeState.rows = rows
+	BridgeState.minX, BridgeState.maxX = minX, maxX
+	BridgeState.minZ, BridgeState.maxZ = minZ, maxZ
+	BridgeState.lowestY = lowestY
+end
+
 -- ======================= tries (falls / deaths) =======================
 local rewardedThisTry = {} -- [player] = { [tile] = true }
 local lastPaid = {} -- [player] = { [tile] = time }
 
 local function newTry(player)
 	rewardedThisTry[player] = {}
+	BridgeState.lastSafe[player] = nil
 	remote:FireClient(player, "Reset")
+end
+
+-- tell the revive script what the player had reached, before it's reset
+local function failed(player, kind)
+	BridgeState.fireFail(player, kind, BridgeState.lastSafe[player], rewardedThisTry[player])
+end
+
+function BridgeState.resumeTry(player, try, tile)
+	if not player.Parent then return end
+	rewardedThisTry[player] = try or {}
+	BridgeState.lastSafe[player] = tile
 end
 
 local function setup(player)
@@ -115,6 +147,7 @@ for _, p in ipairs(Players:GetPlayers()) do setup(p) end
 Players.PlayerRemoving:Connect(function(player)
 	rewardedThisTry[player] = nil
 	lastPaid[player] = nil
+	BridgeState.lastSafe[player] = nil
 end)
 
 -- ======================= stepping on tiles =======================
@@ -140,7 +173,9 @@ end
 
 local function correctStep(player, tile)
 	local try = rewardedThisTry[player]
-	if not try or try[tile] then return end
+	if not try then return end
+	BridgeState.lastSafe[player] = tile
+	if try[tile] then return end
 	try[tile] = true
 	local paid = false
 	local now = os.clock()
@@ -164,6 +199,7 @@ for tile, data in pairs(info) do
 			correctStep(player, tile)
 		else
 			breakTile(tile)
+			failed(player, "Glass")
 			local root = character:FindFirstChild("HumanoidRootPart")
 			if root then
 				root.AssemblyLinearVelocity = Vector3.new(0, -10, 0) -- just drop, no fling
@@ -211,10 +247,13 @@ catcher.Touched:Connect(function(hit)
 	if spawnPad then
 		root.CFrame = spawnPad.CFrame * CFrame.new(math.random(-4, 4), spawnPad.Size.Y / 2 + 4, math.random(-4, 4))
 	end
+	failed(player, "Fall")
 	newTry(player)
 	remote:FireClient(player, "Caught")
 	task.delay(1, function() catching[player] = nil end)
 end)
+
+BridgeState.ready = true
 
 local safe = 0
 for _, d in pairs(info) do if d.correct then safe += 1 end end
