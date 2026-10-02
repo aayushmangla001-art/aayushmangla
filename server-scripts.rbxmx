@@ -1,0 +1,1664 @@
+<roblox xmlns:xmime="http://www.w3.org/2005/05/xmlmime" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://www.roblox.com/roblox.xsd" version="4">
+	<Meta name="ExplicitAutoJoints">true</Meta>
+	<External>null</External>
+	<External>nil</External>
+	<Item class="ModuleScript" referent="RBX2D14EFB2909C406398D9CA79D09FD580">
+		<Properties>
+			<Content name="LinkedSource"><null></null></Content>
+			<ProtectedString name="Source"><![CDATA[-- Wins (server)
+-- Keeps each player's wins in the player attribute "Wins" (the wins bar reads it)
+-- and saves them. Other scripts:
+--   local Wins = require(game.ServerScriptService.Wins)
+--   Wins.Add(player, 1)   -- adds wins and plays the win celebration on that player's screen
+
+local Players = game:GetService("Players")
+local DataStoreService = game:GetService("DataStoreService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local store = DataStoreService:GetDataStore("PlayerWins_v1")
+local canSave = {} -- only save after a successful load (never wipe real data)
+
+local Wins = {}
+local remote -- created in init
+
+function Wins.Get(player)
+	return player:GetAttribute("Wins") or 0
+end
+
+local function save(player)
+	if not canSave[player] then return end
+	local value = Wins.Get(player)
+	pcall(function() store:SetAsync("Wins_" .. player.UserId, value) end)
+end
+
+function Wins.Add(player, amount)
+	amount = math.floor(tonumber(amount) or 1)
+	player:SetAttribute("Wins", Wins.Get(player) + amount)
+	if remote then remote:FireClient(player, "Win", amount) end
+	task.spawn(save, player)
+end
+
+local function onJoin(player)
+	player:SetAttribute("Wins", 0)
+	for attempt = 1, 3 do
+		local ok, saved = pcall(function() return store:GetAsync("Wins_" .. player.UserId) end)
+		if ok then
+			if player.Parent then
+				-- keep any wins earned while loading
+				player:SetAttribute("Wins", (tonumber(saved) or 0) + Wins.Get(player))
+				canSave[player] = true
+			end
+			return
+		end
+		task.wait(attempt)
+	end
+end
+
+function Wins.init()
+	remote = ReplicatedStorage:FindFirstChild("WinRemote") or Instance.new("RemoteEvent")
+	remote.Name = "WinRemote"
+	remote.Parent = ReplicatedStorage
+	Players.PlayerAdded:Connect(onJoin)
+	for _, p in ipairs(Players:GetPlayers()) do task.spawn(onJoin, p) end
+	Players.PlayerRemoving:Connect(function(player)
+		save(player)
+		canSave[player] = nil
+	end)
+	game:BindToClose(function()
+		for _, p in ipairs(Players:GetPlayers()) do task.spawn(save, p) end
+		task.wait(2)
+	end)
+end
+
+return Wins
+]]></ProtectedString>
+			<string name="ScriptGuid">{B6E39AAF-8BFC-4350-9B67-43E61315F951}</string>
+			<BinaryString name="AttributesSerialize"></BinaryString>
+			<SecurityCapabilities name="Capabilities">0</SecurityCapabilities>
+			<bool name="DefinesCapabilities">false</bool>
+			<string name="Name">Wins</string>
+			<int64 name="SourceAssetId">-1</int64>
+			<SharedString name="Tags">yuZpQdnvvUBOTYh1jqZ2cA==</SharedString>
+		</Properties>
+	</Item>
+	<Item class="ModuleScript" referent="RBXA85036CACB864FAD8AE5A4BDE8409742">
+		<Properties>
+			<Content name="LinkedSource"><null></null></Content>
+			<ProtectedString name="Source"><![CDATA[-- Money (server)
+-- Keeps each player's money in the player attribute "Money" (the on-screen label reads it),
+-- saves it to a DataStore, and gives other scripts a simple API:
+--
+--   local Money = require(game.ServerScriptService.Money)
+--   Money.Add(player, 100)      -- give money
+--   Money.Spend(player, 50)     -- take money, returns false if they can't afford it
+--   Money.Get(player)           -- current amount
+--   Money.Set(player, 0)        -- set an exact amount
+
+local Players = game:GetService("Players")
+local DataStoreService = game:GetService("DataStoreService")
+
+local STORE_NAME = "PlayerMoney_v1"
+local START_MONEY = 0
+local AUTOSAVE_SECONDS = 60
+local MAX_MONEY = 9e15 -- largest amount that stays exact
+
+local store = DataStoreService:GetDataStore(STORE_NAME)
+local canSave = {} -- [player] = true once their saved data loaded (never overwrite unloaded data)
+
+local Money = {}
+
+local function clean(amount)
+	amount = math.floor(tonumber(amount) or 0)
+	return math.clamp(amount, 0, MAX_MONEY)
+end
+
+function Money.Get(player)
+	return player:GetAttribute("Money") or 0
+end
+
+function Money.Set(player, amount)
+	player:SetAttribute("Money", clean(amount))
+end
+
+function Money.Add(player, amount)
+	local total = clean(Money.Get(player) + (tonumber(amount) or 0))
+	player:SetAttribute("Money", total)
+	return total
+end
+
+function Money.Spend(player, amount)
+	amount = math.floor(tonumber(amount) or 0)
+	if amount <= 0 or Money.Get(player) < amount then
+		return false
+	end
+	Money.Set(player, Money.Get(player) - amount)
+	return true
+end
+
+local function keyFor(player)
+	return "Player_" .. player.UserId
+end
+
+local function load(player)
+	for attempt = 1, 3 do
+		local ok, saved = pcall(function()
+			return store:GetAsync(keyFor(player))
+		end)
+		if ok then
+			if not player.Parent then
+				return
+			end
+			-- keep anything earned while the data was loading
+			player:SetAttribute("Money", clean(clean(saved or START_MONEY) + Money.Get(player)))
+			canSave[player] = true
+			return
+		end
+		task.wait(attempt)
+	end
+	warn("[Money] Could not load " .. player.Name .. "'s money, so it won't be saved this session")
+end
+
+local function save(player)
+	if not canSave[player] then
+		return
+	end
+	local amount = Money.Get(player)
+	local ok, err = pcall(function()
+		store:SetAsync(keyFor(player), amount)
+	end)
+	if not ok then
+		warn("[Money] Could not save " .. player.Name .. ": " .. tostring(err))
+	end
+end
+
+local function onPlayerAdded(player)
+	player:SetAttribute("Money", START_MONEY)
+	load(player)
+end
+
+function Money.init()
+	Players.PlayerAdded:Connect(onPlayerAdded)
+	for _, player in ipairs(Players:GetPlayers()) do
+		task.spawn(onPlayerAdded, player)
+	end
+
+	Players.PlayerRemoving:Connect(function(player)
+		save(player)
+		canSave[player] = nil
+	end)
+
+	task.spawn(function()
+		while true do
+			task.wait(AUTOSAVE_SECONDS)
+			for _, player in ipairs(Players:GetPlayers()) do
+				task.spawn(save, player)
+			end
+		end
+	end)
+
+	game:BindToClose(function()
+		local pending = 0
+		for _, player in ipairs(Players:GetPlayers()) do
+			pending += 1
+			task.spawn(function()
+				save(player)
+				pending -= 1
+			end)
+		end
+		local waited = 0
+		while pending > 0 and waited < 25 do
+			task.wait(0.2)
+			waited += 0.2
+		end
+	end)
+end
+
+return Money
+]]></ProtectedString>
+			<string name="ScriptGuid">{5E1DD636-6C1D-409A-A664-94ED04E4B254}</string>
+			<BinaryString name="AttributesSerialize"></BinaryString>
+			<SecurityCapabilities name="Capabilities">0</SecurityCapabilities>
+			<bool name="DefinesCapabilities">false</bool>
+			<string name="Name">Money</string>
+			<int64 name="SourceAssetId">-1</int64>
+			<SharedString name="Tags">yuZpQdnvvUBOTYh1jqZ2cA==</SharedString>
+		</Properties>
+	</Item>
+	<Item class="ModuleScript" referent="RBXA16D343ED18C47659B7452A1570C45A6">
+		<Properties>
+			<Content name="LinkedSource"><null></null></Content>
+			<ProtectedString name="Source"><![CDATA[-- ItemGiver
+-- Gives a power-up only if the player doesn't already own it.
+-- If they do, it shows the "You already own this item" popup instead.
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerStorage = game:GetService("ServerStorage")
+local InsertService = game:GetService("InsertService")
+
+local Notice = ReplicatedStorage:WaitForChild("ItemNotice")
+
+local NOTICE_COOLDOWN = 2.5 -- seconds between popups for one player
+local GRACE_AFTER_GIVING = 3 -- no popup right after they just picked it up
+
+local ItemGiver = {}
+
+local lastNotice = {} -- [player] = time of last popup
+local grace = {} -- [player] = { [itemName] = time until popup allowed }
+
+Players.PlayerRemoving:Connect(function(player)
+	lastNotice[player] = nil
+	grace[player] = nil
+end)
+
+local function owns(player, itemName)
+	local backpack = player:FindFirstChildOfClass("Backpack")
+	if backpack and backpack:FindFirstChild(itemName) then
+		return true
+	end
+	local character = player.Character
+	if character and character:FindFirstChild(itemName) then
+		return true -- currently held
+	end
+	local gear = player:FindFirstChild("StarterGear")
+	if gear and gear:FindFirstChild(itemName) then
+		return true -- kept for respawns
+	end
+	return false
+end
+
+ItemGiver.owns = owns
+
+-- Give an item right away (no touch needed). Returns false if they already own it.
+function ItemGiver.give(player, itemName, makeItem)
+	if owns(player, itemName) then
+		return false
+	end
+	local backpack = player:FindFirstChildOfClass("Backpack")
+	local tool = makeItem()
+	if not tool or not backpack then
+		if tool then tool:Destroy() end
+		return false
+	end
+	tool.Name = itemName
+	local handle = tool:FindFirstChild("Handle")
+	if handle then
+		handle.Anchored = false
+	end
+	tool.Parent = backpack
+	return true
+end
+
+-- Returns a function that builds a fresh copy of a catalog tool
+function ItemGiver.fromAsset(assetId)
+	return function()
+		local ok, model = pcall(function()
+			return InsertService:LoadAsset(assetId)
+		end)
+		if not ok or not model then
+			warn("ItemGiver: could not load asset " .. tostring(assetId))
+			return nil
+		end
+		local tool = model:GetChildren()[1]
+		if not tool then
+			model:Destroy()
+			return nil
+		end
+		tool.Parent = nil
+		model:Destroy()
+		return tool
+	end
+end
+
+-- Returns a function that clones a tool stored in ServerStorage
+function ItemGiver.fromStorage(toolName)
+	return function()
+		local source = ServerStorage:FindFirstChild(toolName)
+		if not source then
+			warn("ItemGiver: ServerStorage." .. toolName .. " is missing")
+			return nil
+		end
+		return source:Clone()
+	end
+end
+
+-- giverPart   : the part players step on
+-- itemName    : the tool's Name (used to check ownership)
+-- displayName : friendly name shown in the popup
+-- makeItem    : function that returns a new tool
+function ItemGiver.setup(giverPart, itemName, displayName, makeItem)
+	local busy = {}
+
+	giverPart.Touched:Connect(function(hit)
+		local player = Players:GetPlayerFromCharacter(hit.Parent)
+		if not player or busy[player] then
+			return
+		end
+		busy[player] = true
+
+		if owns(player, itemName) then
+			local now = os.clock()
+			local graceUntil = grace[player] and grace[player][itemName] or 0
+			local lastShown = lastNotice[player] or 0
+			if now >= graceUntil and now - lastShown >= NOTICE_COOLDOWN then
+				lastNotice[player] = now
+				Notice:FireClient(player, displayName)
+			end
+		else
+			local tool = makeItem()
+			local backpack = player:FindFirstChildOfClass("Backpack")
+			if tool and backpack and not owns(player, itemName) then
+				tool.Name = itemName
+				local handle = tool:FindFirstChild("Handle")
+				if handle then
+					handle.Anchored = false
+				end
+				tool.Parent = backpack
+				grace[player] = grace[player] or {}
+				grace[player][itemName] = os.clock() + GRACE_AFTER_GIVING
+			elseif tool then
+				tool:Destroy()
+			end
+		end
+
+		task.wait(0.5)
+		busy[player] = nil
+	end)
+end
+
+return ItemGiver
+]]></ProtectedString>
+			<string name="ScriptGuid">{69953C60-8932-4996-9FF8-51C092BB6152}</string>
+			<BinaryString name="AttributesSerialize"></BinaryString>
+			<SecurityCapabilities name="Capabilities">0</SecurityCapabilities>
+			<bool name="DefinesCapabilities">false</bool>
+			<string name="Name">ItemGiver</string>
+			<int64 name="SourceAssetId">-1</int64>
+			<SharedString name="Tags">yuZpQdnvvUBOTYh1jqZ2cA==</SharedString>
+		</Properties>
+	</Item>
+	<Item class="Script" referent="RBXC25164E06C364517BBF2D5480619EC16">
+		<Properties>
+			<ProtectedString name="Source"><![CDATA[require(game:GetService("ServerScriptService"):WaitForChild("Wins")).init()
+]]></ProtectedString>
+			<bool name="Disabled">false</bool>
+			<Content name="LinkedSource"><null></null></Content>
+			<token name="RunContext">0</token>
+			<string name="ScriptGuid">{7BA99FC8-328A-41BE-B6A2-148EE85F7ACD}</string>
+			<BinaryString name="AttributesSerialize"></BinaryString>
+			<SecurityCapabilities name="Capabilities">0</SecurityCapabilities>
+			<bool name="DefinesCapabilities">false</bool>
+			<string name="Name">WinsInit</string>
+			<int64 name="SourceAssetId">-1</int64>
+			<SharedString name="Tags">yuZpQdnvvUBOTYh1jqZ2cA==</SharedString>
+		</Properties>
+	</Item>
+	<Item class="Script" referent="RBX0082F07018644091A42A3E3398DA279B">
+		<Properties>
+			<ProtectedString name="Source"><![CDATA[-- SpinWheel (server)
+-- Players standing in the white ring pay $1,000 to spin. The server picks the
+-- prize (the client can't choose), spins the wheel for everyone, and gives the
+-- prize when the wheel stops.
+--
+-- Normal odds: average payout is about $820 per $1,000 spin, so players lose
+-- money on average. It's a luck game, not a money farm.
+-- Beginner's luck: each player's first 3 spins EVER use better odds (no $10,000
+-- and no Magic Carpet). The spin count is saved, so rejoining doesn't reset it.
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
+local DataStoreService = game:GetService("DataStoreService")
+local RunService = game:GetService("RunService")
+
+local Money = require(ServerScriptService:WaitForChild("Money"))
+local ItemGiver = require(ServerScriptService:WaitForChild("ItemGiver"))
+local remote = ReplicatedStorage:WaitForChild("SpinWheelRemote")
+
+local SPIN_COST = 1000
+local SPIN_TIME = 5.5 -- seconds (the client uses the same number)
+local EXTRA_TURNS = 5
+local BEGINNER_SPINS = 3
+
+local PRIZES = {
+	Cash100   = { Kind = "Money", Amount = 100 },
+	Cash500   = { Kind = "Money", Amount = 500 },
+	Cash1000  = { Kind = "Money", Amount = 1000 },
+	Cash2000  = { Kind = "Money", Amount = 2000 },
+	Cash5000  = { Kind = "Money", Amount = 5000 },
+	Cash10000 = { Kind = "Money", Amount = 10000 },
+	Gravity   = { Kind = "Item", ItemName = "GravityCoil", Make = ItemGiver.fromAsset(16688968) },
+	Carpet    = { Kind = "Item", ItemName = "RainbowMagicCarpet", Make = ItemGiver.fromStorage("RainbowMagicCarpet") },
+}
+-- If they win an item they already own, they get their $1,000 back instead.
+
+-- Chances in percent (each list adds up to 100). The wheel shows NORMAL_ODDS.
+local NORMAL_ODDS = {
+	{ "Cash100", 30 }, { "Cash500", 40 }, { "Cash1000", 20 }, { "Cash2000", 4.4 },
+	{ "Cash5000", 4 }, { "Cash10000", 1 }, { "Gravity", 0.4 }, { "Carpet", 0.2 },
+}
+local BEGINNER_ODDS = {
+	{ "Cash100", 10 }, { "Cash500", 25 }, { "Cash1000", 30 }, { "Cash2000", 25 },
+	{ "Cash5000", 10 }, { "Cash10000", 0 }, { "Gravity", 0 }, { "Carpet", 0 },
+}
+
+-- ======================== spin count (saved) ========================
+local store = DataStoreService:GetDataStore("SpinWheel_v1")
+local spinCount = {} -- [player] = number of spins ever
+local countLoaded = {}
+
+local function loadCount(player)
+	for attempt = 1, 3 do
+		local ok, saved = pcall(function() return store:GetAsync("Spins_" .. player.UserId) end)
+		if ok then
+			spinCount[player] = tonumber(saved) or 0
+			countLoaded[player] = true
+			return
+		end
+		task.wait(attempt)
+	end
+	-- Couldn't load: in Studio (where saving is usually off) treat them as new so
+	-- you can test; in the real game give no beginner's luck, so it can't be abused.
+	spinCount[player] = RunService:IsStudio() and 0 or BEGINNER_SPINS
+end
+
+local function saveCount(player)
+	if not countLoaded[player] then return end
+	local count = spinCount[player]
+	pcall(function() store:SetAsync("Spins_" .. player.UserId, count) end)
+end
+
+Players.PlayerAdded:Connect(loadCount)
+for _, p in ipairs(Players:GetPlayers()) do task.spawn(loadCount, p) end
+Players.PlayerRemoving:Connect(function(player)
+	saveCount(player)
+	spinCount[player] = nil
+	countLoaded[player] = nil
+end)
+game:BindToClose(function()
+	for _, p in ipairs(Players:GetPlayers()) do task.spawn(saveCount, p) end
+	task.wait(2)
+end)
+
+-- ======================== wheel parts ========================
+local wheel = workspace:WaitForChild("wheel")
+local hub
+local spinParts = {}
+local slices = {} -- [prizeId] = slice model
+for _, d in ipairs(wheel:GetDescendants()) do
+	if d:GetAttribute("SpinHub") then hub = d end
+	if d:GetAttribute("PrizeId") then slices[d:GetAttribute("PrizeId")] = d end
+end
+assert(hub, "SpinWheel: hub not found")
+table.insert(spinParts, hub)
+for _, slice in pairs(slices) do
+	for _, p in ipairs(slice:GetDescendants()) do
+		if p:IsA("BasePart") then table.insert(spinParts, p) end
+	end
+end
+
+local ring = wheel:WaitForChild("SpinRing")
+local RING_CENTER = ring:GetAttribute("Center")
+local RING_RADIUS = ring:GetAttribute("Radius")
+
+local function inRing(player)
+	local character = player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if not root then return false end
+	local d = root.Position - RING_CENTER
+	return Vector3.new(d.X, 0, d.Z).Magnitude <= RING_RADIUS + 2 and math.abs(d.Y) < 12
+end
+
+local rng = Random.new()
+local function pickPrize(odds)
+	local roll = rng:NextNumber(0, 100)
+	local total = 0
+	for _, entry in ipairs(odds) do
+		total += entry[2]
+		if entry[2] > 0 and roll <= total then return entry[1] end
+	end
+	return odds[1][1]
+end
+
+-- clockwise angle (as seen from the front) of a slice, 0 = straight up at the pointer.
+-- Measured against the WORLD's up direction: the hub's own axes spin with the wheel.
+local FACING = hub.CFrame.LookVector
+local FIXED_UP = Vector3.yAxis
+local FIXED_RIGHT = (-FACING):Cross(FIXED_UP).Unit
+local function sliceAngle(slice)
+	-- CenterAngle = the slice's exact centre on the wheel face (measured once in Studio);
+	-- add how far the wheel itself has turned
+	local u = hub.CFrame.UpVector
+	local wheelTurn = math.deg(math.atan2(u:Dot(FIXED_RIGHT), u:Dot(FIXED_UP)))
+	return (slice:GetAttribute("CenterAngle") + wheelTurn) % 360
+end
+
+local function giveReward(player, prizeId)
+	local prize = PRIZES[prizeId]
+	if prize.Kind == "Money" then
+		Money.Add(player, prize.Amount)
+		return prizeId, prize.Amount
+	end
+	if ItemGiver.give(player, prize.ItemName, prize.Make) then
+		return prizeId, 0
+	end
+	Money.Add(player, SPIN_COST)
+	return "Refund", SPIN_COST
+end
+
+-- ======================== spinning ========================
+local spinning = false
+local busy = {}
+
+remote.OnServerEvent:Connect(function(player, action)
+	if action ~= "Spin" or busy[player] then return end
+	busy[player] = true
+	task.delay(0.5, function() busy[player] = nil end)
+
+	if spinning then
+		remote:FireClient(player, "Busy")
+		return
+	end
+	if not inRing(player) or spinCount[player] == nil then
+		return
+	end
+	if not Money.Spend(player, SPIN_COST) then
+		remote:FireClient(player, "NoMoney")
+		return
+	end
+	spinning = true
+
+	local beginner = spinCount[player] < BEGINNER_SPINS
+	spinCount[player] += 1
+	if spinCount[player] == BEGINNER_SPINS then task.spawn(saveCount, player) end
+
+	local prizeId = pickPrize(beginner and BEGINNER_ODDS or NORMAL_ODDS)
+	local current = sliceAngle(slices[prizeId])
+	local offset = rng:NextNumber(-16, 16)
+	local turn = ((360 - current) % 360) + offset + 360 * EXTRA_TURNS
+
+	local startCF = hub.CFrame
+	local relatives = {}
+	for i, p in ipairs(spinParts) do relatives[i] = startCF:ToObjectSpace(p.CFrame) end
+
+	remote:FireAllClients("Spin", { Spinner = player, Turn = turn, Duration = SPIN_TIME, PrizeId = prizeId })
+
+	task.wait(SPIN_TIME + 0.15)
+
+	local finalCF = CFrame.new(startCF.Position) * CFrame.fromAxisAngle(FACING, -math.rad(turn)) * (startCF - startCF.Position)
+	for i, p in ipairs(spinParts) do p.CFrame = finalCF * relatives[i] end
+
+	if player.Parent then
+		local resultId, amount = giveReward(player, prizeId)
+		remote:FireAllClients("Result", { Spinner = player, PrizeId = resultId, Amount = amount })
+	end
+	spinning = false
+end)
+
+Players.PlayerRemoving:Connect(function(player) busy[player] = nil end)
+]]></ProtectedString>
+			<bool name="Disabled">false</bool>
+			<Content name="LinkedSource"><null></null></Content>
+			<token name="RunContext">0</token>
+			<string name="ScriptGuid">{76B86A7C-D121-4FB2-A0A0-690F88A3ECC3}</string>
+			<BinaryString name="AttributesSerialize"></BinaryString>
+			<SecurityCapabilities name="Capabilities">0</SecurityCapabilities>
+			<bool name="DefinesCapabilities">false</bool>
+			<string name="Name">SpinWheel</string>
+			<int64 name="SourceAssetId">-1</int64>
+			<SharedString name="Tags">yuZpQdnvvUBOTYh1jqZ2cA==</SharedString>
+		</Properties>
+	</Item>
+	<Item class="Script" referent="RBX3CA2FACF0B574BE78BE41E391E42005C">
+		<Properties>
+			<ProtectedString name="Source"><![CDATA[-- SlapShop (server)
+-- Sammy's shop: buying, owning and saving items (ReplicatedStorage > ShopConfig).
+-- Everything is checked here, so a player can't get an item without paying.
+-- Owned items are saved, given back every time you join, and kept through respawns.
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerStorage = game:GetService("ServerStorage")
+local DataStoreService = game:GetService("DataStoreService")
+local HttpService = game:GetService("HttpService")
+local Money = require(script.Parent:WaitForChild("Money"))
+local ITEMS = require(ReplicatedStorage:WaitForChild("ShopConfig"))
+local shelf = ServerStorage:WaitForChild("ShopItems")
+
+local byId = {}
+for _, item in ipairs(ITEMS) do byId[item.Id] = item end
+
+local remote = ReplicatedStorage:FindFirstChild("ShopRemote") or Instance.new("RemoteFunction")
+remote.Name = "ShopRemote"
+remote.Parent = ReplicatedStorage
+
+local store = DataStoreService:GetDataStore("ShopOwned_v1")
+local owned = {} -- [player] = { [id] = true }
+local loaded = {} -- only save after a successful load (never wipe real data)
+
+local function publish(player)
+	local list = {}
+	for id in pairs(owned[player] or {}) do table.insert(list, id) end
+	player:SetAttribute("OwnedItems", HttpService:JSONEncode(list))
+end
+
+local function give(player, item)
+	local template = shelf:FindFirstChild(item.Tool)
+	if not template then return end
+	local gear = player:FindFirstChild("StarterGear")
+	if gear and not gear:FindFirstChild(item.Tool) then template:Clone().Parent = gear end
+	local backpack = player:FindFirstChildOfClass("Backpack")
+	local character = player.Character
+	if backpack and not backpack:FindFirstChild(item.Tool) and not (character and character:FindFirstChild(item.Tool)) then
+		template:Clone().Parent = backpack
+	end
+end
+
+local function save(player)
+	if not loaded[player] then return end
+	local list = {}
+	for id in pairs(owned[player]) do table.insert(list, id) end
+	pcall(function() store:SetAsync("Owned_" .. player.UserId, list) end)
+end
+
+local function onJoin(player)
+	owned[player] = {}
+	publish(player)
+	for attempt = 1, 3 do
+		local ok, data = pcall(function() return store:GetAsync("Owned_" .. player.UserId) end)
+		if ok then
+			for _, id in ipairs(data or {}) do
+				if byId[id] then owned[player][id] = true end
+			end
+			loaded[player] = true
+			break
+		end
+		task.wait(attempt)
+	end
+	if not player.Parent then return end
+	publish(player)
+	if not player.Character then player.CharacterAdded:Wait() end
+	for id in pairs(owned[player]) do give(player, byId[id]) end
+end
+Players.PlayerAdded:Connect(onJoin)
+for _, p in ipairs(Players:GetPlayers()) do task.spawn(onJoin, p) end
+Players.PlayerRemoving:Connect(function(player)
+	owned[player] = nil
+	loaded[player] = nil
+end)
+
+remote.OnServerInvoke = function(player, action, id)
+	local item = byId[id]
+	if not item or not owned[player] then return false, "Unknown" end
+	if action == "Buy" then
+		if owned[player][id] then
+			give(player, item)
+			return true, "Owned"
+		end
+		if not Money.Spend(player, item.Price) then
+			return false, "NoMoney"
+		end
+		owned[player][id] = true
+		publish(player)
+		give(player, item)
+		task.spawn(save, player)
+		return true, "Bought"
+	elseif action == "Equip" then
+		if not owned[player][id] then return false, "NotOwned" end
+		give(player, item)
+		return true, "Equipped"
+	end
+	return false, "Unknown"
+end
+]]></ProtectedString>
+			<bool name="Disabled">false</bool>
+			<Content name="LinkedSource"><null></null></Content>
+			<token name="RunContext">0</token>
+			<string name="ScriptGuid">{76DB1627-FE1D-4180-B2C8-6C5B8141DC51}</string>
+			<BinaryString name="AttributesSerialize"></BinaryString>
+			<SecurityCapabilities name="Capabilities">0</SecurityCapabilities>
+			<bool name="DefinesCapabilities">false</bool>
+			<string name="Name">SlapShop</string>
+			<int64 name="SourceAssetId">-1</int64>
+			<SharedString name="Tags">yuZpQdnvvUBOTYh1jqZ2cA==</SharedString>
+		</Properties>
+	</Item>
+	<Item class="Script" referent="RBX6FBA81B6BE474B219C8E1E68129B9EB8">
+		<Properties>
+			<ProtectedString name="Source"><![CDATA[-- SlapGloves (server)
+-- Makes every tool with the attribute "SlapPower" work as a slap glove.
+-- The tools themselves have no scripts; everything is checked here on the server.
+--   SlapPower    = how hard the slap knocks players back
+--   SlapCooldown = seconds between slaps
+--   SlapColor    = colour of the hit sparks (Rainbow = true for rainbow sparks)
+-- Players in the AFK area (attribute InAFK) can't slap or be slapped.
+
+local Players = game:GetService("Players")
+local Debris = game:GetService("Debris")
+
+local RAINBOW = ColorSequence.new({
+	ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 60, 60)),
+	ColorSequenceKeypoint.new(0.25, Color3.fromRGB(255, 220, 50)),
+	ColorSequenceKeypoint.new(0.5, Color3.fromRGB(70, 230, 100)),
+	ColorSequenceKeypoint.new(0.75, Color3.fromRGB(70, 160, 255)),
+	ColorSequenceKeypoint.new(1, Color3.fromRGB(200, 80, 255)),
+})
+
+local function hitSparks(position, tool)
+	local a = Instance.new("Part")
+	a.Anchored, a.CanCollide, a.CanQuery, a.CanTouch, a.Transparency = true, false, false, false, 1
+	a.Size = Vector3.new(1, 1, 1)
+	a.CFrame = CFrame.new(position)
+	a.Parent = workspace
+	local e = Instance.new("ParticleEmitter")
+	e.Rate = 0
+	e.Color = tool:GetAttribute("Rainbow") and RAINBOW or ColorSequence.new(tool:GetAttribute("SlapColor") or Color3.new(1, 1, 1))
+	e.LightEmission = 1
+	e.Lifetime = NumberRange.new(0.3, 0.6)
+	e.Speed = NumberRange.new(14, 26)
+	e.SpreadAngle = Vector2.new(180, 180)
+	e.Drag = 4
+	e.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.7), NumberSequenceKeypoint.new(1, 0) })
+	e.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 1) })
+	e.Parent = a
+	e:Emit(math.floor(12 + (tool:GetAttribute("SlapPower") or 40) / 4))
+	Debris:AddItem(a, 1)
+end
+
+local function findVictim(player, character)
+	local root = character:FindFirstChild("HumanoidRootPart")
+	if not root then return nil end
+	local params = OverlapParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = { character }
+	local box = root.CFrame * CFrame.new(0, 0, -3.5)
+	local best, bestDist
+	for _, part in ipairs(workspace:GetPartBoundsInBox(box, Vector3.new(6, 7, 7), params)) do
+		local model = part:FindFirstAncestorOfClass("Model")
+		local victim = model and Players:GetPlayerFromCharacter(model)
+		local hum = model and model:FindFirstChildOfClass("Humanoid")
+		local vRoot = model and model:FindFirstChild("HumanoidRootPart")
+		if victim and victim ~= player and hum and hum.Health > 0 and vRoot and not victim:GetAttribute("InAFK") then
+			local d = (vRoot.Position - root.Position).Magnitude
+			if not bestDist or d < bestDist then best, bestDist = model, d end
+		end
+	end
+	return best
+end
+
+local function slap(player, character, tool)
+	local root = character:FindFirstChild("HumanoidRootPart")
+	local victim = findVictim(player, character)
+	if not root or not victim then return end
+	local vRoot = victim.HumanoidRootPart
+	local vHum = victim:FindFirstChildOfClass("Humanoid")
+	local power = tool:GetAttribute("SlapPower") or 40
+	local dir = (vRoot.Position - root.Position) * Vector3.new(1, 0, 1)
+	dir = dir.Magnitude > 0.1 and dir.Unit or root.CFrame.LookVector
+	-- knock back (and a little up)
+	local bv = Instance.new("BodyVelocity")
+	bv.MaxForce = Vector3.new(1e6, 1e6, 1e6)
+	bv.Velocity = dir * power + Vector3.new(0, power * 0.35, 0)
+	bv.Parent = vRoot
+	Debris:AddItem(bv, 0.18)
+	vHum.PlatformStand = true
+	task.delay(0.7, function()
+		if vHum.Parent then vHum.PlatformStand = false end
+	end)
+	local tag = Instance.new("ObjectValue")
+	tag.Name = "creator"
+	tag.Value = player
+	tag.Parent = vHum
+	Debris:AddItem(tag, 3)
+	hitSparks(vRoot.Position, tool)
+	local handle = tool:FindFirstChild("Handle")
+	local smack = handle and handle:FindFirstChild("Smack")
+	if smack and smack:IsA("Sound") then pcall(function() smack:Play() end) end
+end
+
+local hooked = setmetatable({}, { __mode = "k" })
+local function hook(tool)
+	if hooked[tool] or not tool:IsA("Tool") or not tool:GetAttribute("SlapPower") then return end
+	hooked[tool] = true
+	local last = 0
+	tool.Activated:Connect(function()
+		local character = tool.Parent
+		local player = Players:GetPlayerFromCharacter(character)
+		if not player or player:GetAttribute("InAFK") then return end
+		local now = os.clock()
+		if now - last < (tool:GetAttribute("SlapCooldown") or 1) then return end
+		last = now
+		-- Roblox's built-in swing animation (works for every avatar and morph)
+		local anim = Instance.new("StringValue")
+		anim.Name = "toolanim"
+		anim.Value = "Slash"
+		anim.Parent = tool
+		Debris:AddItem(anim, 1)
+		task.delay(0.12, function()
+			if tool.Parent == character then slap(player, character, tool) end
+		end)
+	end)
+end
+
+-- tools get hooked the moment they're equipped (they move into the character)
+workspace.DescendantAdded:Connect(function(d)
+	if d:IsA("Tool") then hook(d) end
+end)
+for _, d in ipairs(workspace:GetDescendants()) do
+	if d:IsA("Tool") then hook(d) end
+end
+]]></ProtectedString>
+			<bool name="Disabled">false</bool>
+			<Content name="LinkedSource"><null></null></Content>
+			<token name="RunContext">0</token>
+			<string name="ScriptGuid">{72250C6E-B0D5-4063-98B3-87F6186426C8}</string>
+			<BinaryString name="AttributesSerialize"></BinaryString>
+			<SecurityCapabilities name="Capabilities">0</SecurityCapabilities>
+			<bool name="DefinesCapabilities">false</bool>
+			<string name="Name">SlapGloves</string>
+			<int64 name="SourceAssetId">-1</int64>
+			<SharedString name="Tags">yuZpQdnvvUBOTYh1jqZ2cA==</SharedString>
+		</Properties>
+	</Item>
+	<Item class="Script" referent="RBXA51D16FBE0F7441BB02B3664FE13CB27">
+		<Properties>
+			<ProtectedString name="Source"><![CDATA[-- ObbyPortals (server)
+-- Portals (Workspace > Obby Portals): touching a portal's glowing Gate sends you to
+-- the spot stored on it (TeleportPos / TeleportLook).
+--  * EASY / MEDIUM / HARD portals start a run of that obby.
+--  * While you're on a run, dying or falling (invisible catcher under each obby)
+--    puts you back at the start of THAT obby, not the spawn.
+--  * The small chest at the end pays its reward and sends you back to the obby hub.
+--  * Leaving through an "OBBY CHOOSER" / "BACK" portal ends the run.
+--  * Anti-farm: if you fly on the magic carpet during a run, the chest won't pay.
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Money = require(script.Parent:WaitForChild("Money"))
+
+local remote = ReplicatedStorage:FindFirstChild("PortalRemote") or Instance.new("RemoteEvent")
+remote.Name = "PortalRemote"
+remote.Parent = ReplicatedStorage
+
+local folder = workspace:WaitForChild("Obby Portals")
+local busy = {}
+local run = {} -- [player] = { obby, startPos, startLook, flew }
+
+local function teleport(player, pos, look, color)
+	local character = player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	if not root or not humanoid or humanoid.Health <= 0 then return end
+	remote:FireClient(player, "Fade", color)
+	pcall(function() player:RequestStreamAroundAsync(pos, 3) end)
+	task.wait(0.15)
+	if not root.Parent then return end
+	humanoid:UnequipTools()
+	for _, name in ipairs({ "FlightSpin", "FlightPower", "FlightHold" }) do
+		local f = root:FindFirstChild(name)
+		if f then f:Destroy() end
+	end
+	root.AssemblyLinearVelocity = Vector3.zero
+	root.AssemblyAngularVelocity = Vector3.zero
+	root.CFrame = CFrame.lookAt(pos, pos + Vector3.new(look.X, 0, look.Z))
+end
+
+local function playerFromHit(hit)
+	local character = hit:FindFirstAncestorOfClass("Model")
+	return character and Players:GetPlayerFromCharacter(character)
+end
+
+-- portals
+for _, gate in ipairs(folder:GetDescendants()) do
+	if gate:IsA("BasePart") and gate:GetAttribute("TeleportPos") then
+		gate.Touched:Connect(function(hit)
+			local player = playerFromHit(hit)
+			if not player or busy[player] then return end
+			busy[player] = true
+			local pos, look = gate:GetAttribute("TeleportPos"), gate:GetAttribute("TeleportLook")
+			if gate:GetAttribute("PortalKind") == "Obby" then
+				run[player] = { obby = gate:GetAttribute("PortalName"), startPos = pos, startLook = look, flew = false }
+			else
+				run[player] = nil
+			end
+			teleport(player, pos, look, gate.Color)
+			task.wait(1.5)
+			busy[player] = nil
+		end)
+	end
+end
+
+-- end-of-obby chests
+for _, chest in ipairs(folder:GetChildren()) do
+	if chest:IsA("BasePart") and chest:GetAttribute("ObbyReward") then
+		local reward = chest:GetAttribute("ObbyReward")
+		local name = chest:GetAttribute("ObbyName")
+		chest.Touched:Connect(function(hit)
+			local player = playerFromHit(hit)
+			if not player or busy[player] then return end
+			busy[player] = true
+			local r = run[player]
+			if r and r.obby == name and not r.flew then
+				run[player] = nil
+				Money.Add(player, reward)
+				remote:FireClient(player, "Reward", name, reward, chest)
+				task.wait(1.6)
+				teleport(player, chest:GetAttribute("ReturnPos"), chest:GetAttribute("ReturnLook"), chest.Color)
+			elseif r and r.obby == name and r.flew then
+				remote:FireClient(player, "NoReward", name, "flew")
+			else
+				remote:FireClient(player, "NoReward", name, "portal")
+			end
+			task.wait(1.5)
+			busy[player] = nil
+		end)
+	end
+end
+
+-- falling under an obby: back to its start (no dying, no waiting)
+for _, catcher in ipairs(folder:GetChildren()) do
+	if catcher:IsA("BasePart") and catcher:GetAttribute("CatchObby") then
+		catcher.Touched:Connect(function(hit)
+			local player = playerFromHit(hit)
+			if not player or busy[player] then return end
+			busy[player] = true
+			local r = run[player]
+			if r then
+				r.flew = false -- fresh attempt
+				teleport(player, r.startPos, r.startLook, Color3.new(1, 1, 1))
+			else
+				local pos = catcher:GetAttribute("StartPos")
+				teleport(player, pos, Vector3.new(-1, 0, 0), Color3.new(1, 1, 1))
+			end
+			task.wait(1)
+			busy[player] = nil
+		end)
+	end
+end
+
+-- watch for carpet flying during a run
+task.spawn(function()
+	while true do
+		for player, r in pairs(run) do
+			local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+			if root and root:FindFirstChild("FlightHold") then r.flew = true end
+		end
+		task.wait(0.25)
+	end
+end)
+
+-- dying during a run: respawn at the start of that obby
+local function setup(player)
+	player.CharacterAdded:Connect(function(character)
+		local r = run[player]
+		if not r then return end
+		local root = character:WaitForChild("HumanoidRootPart", 10)
+		if not root then return end
+		task.wait(0.1)
+		r.flew = false
+		pcall(function() player:RequestStreamAroundAsync(r.startPos, 3) end)
+		root.CFrame = CFrame.lookAt(r.startPos, r.startPos + Vector3.new(r.startLook.X, 0, r.startLook.Z))
+	end)
+end
+Players.PlayerAdded:Connect(setup)
+for _, p in ipairs(Players:GetPlayers()) do setup(p) end
+Players.PlayerRemoving:Connect(function(player)
+	run[player] = nil
+	busy[player] = nil
+end)
+]]></ProtectedString>
+			<bool name="Disabled">false</bool>
+			<Content name="LinkedSource"><null></null></Content>
+			<token name="RunContext">0</token>
+			<string name="ScriptGuid">{E5BE2099-9FE6-4704-B17F-30E900DC2549}</string>
+			<BinaryString name="AttributesSerialize"></BinaryString>
+			<SecurityCapabilities name="Capabilities">0</SecurityCapabilities>
+			<bool name="DefinesCapabilities">false</bool>
+			<string name="Name">ObbyPortals</string>
+			<int64 name="SourceAssetId">-1</int64>
+			<SharedString name="Tags">yuZpQdnvvUBOTYh1jqZ2cA==</SharedString>
+		</Properties>
+	</Item>
+	<Item class="Script" referent="RBX875C8A1A6FFE472AAEE6420397B0FC66">
+		<Properties>
+			<ProtectedString name="Source"><![CDATA[-- MoneyShop: gives money when a player buys a money pack with Robux.
+-- This is the game's only ProcessReceipt handler; if you add other Developer
+-- Products later (like the 2x reward), handle them in this same function.
+
+local Players = game:GetService("Players")
+local MarketplaceService = game:GetService("MarketplaceService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Money = require(script.Parent:WaitForChild("Money"))
+local PACKS = require(ReplicatedStorage:WaitForChild("MoneyShopConfig"))
+
+local packById = {}
+for _, pack in ipairs(PACKS) do
+	if pack.ProductId and pack.ProductId ~= 0 then
+		packById[pack.ProductId] = pack
+	end
+end
+
+MarketplaceService.ProcessReceipt = function(receipt)
+	local player = Players:GetPlayerByUserId(receipt.PlayerId)
+	if not player then
+		-- they left before we could give it; Roblox will retry next time they join
+		return Enum.ProductPurchaseDecision.NotProcessedYet
+	end
+	local pack = packById[receipt.ProductId]
+	if not pack then
+		warn("[MoneyShop] Unknown product " .. tostring(receipt.ProductId))
+		return Enum.ProductPurchaseDecision.NotProcessedYet
+	end
+	Money.Add(player, pack.Amount)
+	return Enum.ProductPurchaseDecision.PurchaseGranted
+end
+]]></ProtectedString>
+			<bool name="Disabled">false</bool>
+			<Content name="LinkedSource"><null></null></Content>
+			<token name="RunContext">0</token>
+			<string name="ScriptGuid">{4010DE02-297D-448D-9083-EB9F8EE512BC}</string>
+			<BinaryString name="AttributesSerialize"></BinaryString>
+			<SecurityCapabilities name="Capabilities">0</SecurityCapabilities>
+			<bool name="DefinesCapabilities">false</bool>
+			<string name="Name">MoneyShop</string>
+			<int64 name="SourceAssetId">-1</int64>
+			<SharedString name="Tags">yuZpQdnvvUBOTYh1jqZ2cA==</SharedString>
+		</Properties>
+	</Item>
+	<Item class="Script" referent="RBX987D3CF7883E4F55943867855BAA851D">
+		<Properties>
+			<ProtectedString name="Source"><![CDATA[require(game:GetService("ServerScriptService"):WaitForChild("Money")).init()
+]]></ProtectedString>
+			<bool name="Disabled">false</bool>
+			<Content name="LinkedSource"><null></null></Content>
+			<token name="RunContext">0</token>
+			<string name="ScriptGuid">{A790114C-33C5-4E22-9A77-99BE0129BA14}</string>
+			<BinaryString name="AttributesSerialize"></BinaryString>
+			<SecurityCapabilities name="Capabilities">0</SecurityCapabilities>
+			<bool name="DefinesCapabilities">false</bool>
+			<string name="Name">MoneyInit</string>
+			<int64 name="SourceAssetId">-1</int64>
+			<SharedString name="Tags">yuZpQdnvvUBOTYh1jqZ2cA==</SharedString>
+		</Properties>
+	</Item>
+	<Item class="Script" referent="RBXA4B9439C212243ECBFF2A504B3C542B1">
+		<Properties>
+			<ProtectedString name="Source"><![CDATA[-- MazeChest (server)
+-- Hold E at the chest at the maze exit to get $500. Then that player has to wait
+-- 5 minutes before claiming again. Each player has their own timer, and it's saved,
+-- so leaving and rejoining doesn't reset it.
+-- Reward / cooldown are attributes on the chest (Reward, CooldownSeconds).
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local DataStoreService = game:GetService("DataStoreService")
+local Money = require(script.Parent:WaitForChild("Money"))
+
+local chest = workspace:WaitForChild("Maze Reward Chest")
+local prompt = chest:WaitForChild("ClaimPrompt")
+local REWARD = chest:GetAttribute("Reward") or 500
+local COOLDOWN = chest:GetAttribute("CooldownSeconds") or 300
+
+local remote = ReplicatedStorage:FindFirstChild("MazeChestRemote") or Instance.new("RemoteEvent")
+remote.Name = "MazeChestRemote"
+remote.Parent = ReplicatedStorage
+
+local store = DataStoreService:GetDataStore("MazeChest_v1")
+local readyAt = {} -- [player] = unix time when they can claim again
+local busy = {}
+
+-- after claiming, the player is sent back to the spawn plate
+local spawnPad = workspace:FindFirstChildWhichIsA("SpawnLocation", true)
+local function sendToSpawn(player)
+	local character = player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	if not root or not humanoid or humanoid.Health <= 0 or not spawnPad then return end
+	-- the same flash the portals use (PortalFX listens for it)
+	local portalRemote = ReplicatedStorage:FindFirstChild("PortalRemote")
+	if portalRemote then portalRemote:FireClient(player, "Fade", Color3.fromRGB(255, 220, 90)) end
+	pcall(function() player:RequestStreamAroundAsync(spawnPad.Position, 3) end)
+	task.wait(0.15)
+	if not root.Parent then return end
+	-- put a flying carpet away first so its forces don't pull the player back
+	humanoid:UnequipTools()
+	for _, name in ipairs({ "FlightSpin", "FlightPower", "FlightHold" }) do
+		local f = root:FindFirstChild(name)
+		if f then f:Destroy() end
+	end
+	root.AssemblyLinearVelocity = Vector3.zero
+	root.AssemblyAngularVelocity = Vector3.zero
+	root.CFrame = spawnPad.CFrame * CFrame.new(math.random(-4, 4), spawnPad.Size.Y / 2 + 4, math.random(-4, 4))
+end
+
+local function setReady(player, t)
+	readyAt[player] = t
+	player:SetAttribute("MazeChestReadyAt", t) -- the sign on each player's screen reads this
+end
+
+local function onJoin(player)
+	setReady(player, 0)
+	local ok, saved = pcall(function() return store:GetAsync("Ready_" .. player.UserId) end)
+	if ok and tonumber(saved) and player.Parent then
+		setReady(player, math.max(readyAt[player] or 0, tonumber(saved)))
+	end
+end
+Players.PlayerAdded:Connect(onJoin)
+for _, p in ipairs(Players:GetPlayers()) do task.spawn(onJoin, p) end
+Players.PlayerRemoving:Connect(function(player)
+	readyAt[player] = nil
+	busy[player] = nil
+end)
+
+prompt.Triggered:Connect(function(player)
+	if busy[player] then return end
+	busy[player] = true
+	local now = os.time()
+	local ready = readyAt[player] or 0
+	if now < ready then
+		remote:FireClient(player, "Wait", ready)
+	else
+		Money.Add(player, REWARD)
+		local nextTime = now + COOLDOWN
+		setReady(player, nextTime)
+		remote:FireClient(player, "Claimed", REWARD)
+		task.spawn(function()
+			pcall(function() store:SetAsync("Ready_" .. player.UserId, nextTime) end)
+		end)
+		task.wait(1.5) -- let them see the confetti, then back to spawn
+		sendToSpawn(player)
+	end
+	task.wait(0.5)
+	busy[player] = nil
+end)
+]]></ProtectedString>
+			<bool name="Disabled">false</bool>
+			<Content name="LinkedSource"><null></null></Content>
+			<token name="RunContext">0</token>
+			<string name="ScriptGuid">{BA051BFE-0780-4584-A55D-1245615F5851}</string>
+			<BinaryString name="AttributesSerialize"></BinaryString>
+			<SecurityCapabilities name="Capabilities">0</SecurityCapabilities>
+			<bool name="DefinesCapabilities">false</bool>
+			<string name="Name">MazeChest</string>
+			<int64 name="SourceAssetId">-1</int64>
+			<SharedString name="Tags">yuZpQdnvvUBOTYh1jqZ2cA==</SharedString>
+		</Properties>
+	</Item>
+	<Item class="Script" referent="RBXCD8B570629DA48CA824E37C4AFABBF90">
+		<Properties>
+			<ProtectedString name="Source"><![CDATA[-- KeepCoilsOnRespawn
+-- Any coil or carpet a player receives (from a giver, a command, anything)
+-- is copied into their StarterGear. Roblox re-adds StarterGear to the Backpack
+-- every time the player respawns, so the item stays until they leave the game.
+
+local Players = game:GetService("Players")
+
+-- Tools whose name contains one of these words are kept (case-insensitive)
+local KEEP_KEYWORDS = { "coil", "carpet" }
+
+local function shouldKeep(item)
+	if not item:IsA("Tool") then
+		return false
+	end
+	local lowerName = string.lower(item.Name)
+	for _, word in ipairs(KEEP_KEYWORDS) do
+		if string.find(lowerName, word, 1, true) then
+			return true
+		end
+	end
+	return false
+end
+
+local function keepTool(player, tool)
+	if not shouldKeep(tool) then
+		return
+	end
+	local gear = player:FindFirstChild("StarterGear")
+	if gear and not gear:FindFirstChild(tool.Name) then
+		local copy = tool:Clone()
+		copy.Parent = gear
+	end
+end
+
+local function watchBackpack(player, backpack)
+	for _, item in ipairs(backpack:GetChildren()) do
+		keepTool(player, item)
+	end
+	backpack.ChildAdded:Connect(function(item)
+		keepTool(player, item)
+	end)
+end
+
+local function onPlayerAdded(player)
+	-- The Backpack is recreated on every respawn, so watch each new one
+	player.ChildAdded:Connect(function(child)
+		if child:IsA("Backpack") then
+			watchBackpack(player, child)
+		end
+	end)
+
+	local backpack = player:FindFirstChildOfClass("Backpack")
+	if backpack then
+		watchBackpack(player, backpack)
+	end
+end
+
+Players.PlayerAdded:Connect(onPlayerAdded)
+for _, player in ipairs(Players:GetPlayers()) do
+	task.spawn(onPlayerAdded, player)
+end
+]]></ProtectedString>
+			<bool name="Disabled">false</bool>
+			<Content name="LinkedSource"><null></null></Content>
+			<token name="RunContext">0</token>
+			<string name="ScriptGuid">{7CF84005-BBD6-44C8-A3C6-FA9CA8C21C82}</string>
+			<BinaryString name="AttributesSerialize"></BinaryString>
+			<SecurityCapabilities name="Capabilities">0</SecurityCapabilities>
+			<bool name="DefinesCapabilities">false</bool>
+			<string name="Name">KeepCoilsOnRespawn</string>
+			<int64 name="SourceAssetId">-1</int64>
+			<SharedString name="Tags">yuZpQdnvvUBOTYh1jqZ2cA==</SharedString>
+		</Properties>
+	</Item>
+	<Item class="Script" referent="RBXBCDEA0437E0E41549D02255C4AFF5B7C">
+		<Properties>
+			<ProtectedString name="Source"><![CDATA[-- GlassBridge (server)
+-- Every row of the bridge has a left and a right tile. Each server picks, at
+-- random, which one is safe. The answer only lives here on the server.
+-- Your tiles keep their own look; nothing about them is restyled.
+--
+--  * Wrong tile: the tile AND its frame shatter, you die, and it grows back
+--    after 30 seconds. Respawning is quick (2 seconds).
+--  * Right tile: turns green (only on your screen) with a green "ghost" of the
+--    tile rising out of it, and pays $100 - once per tile per try.
+--  * Falling off: an invisible catcher under the bridge sends you straight back
+--    to the spawn plate (no dying, no respawn wait). Falling or dying starts a
+--    new try: your green tiles reset and can pay again. A tile can't pay the
+--    same player twice within 20 seconds, so nobody can farm the first row.
+--  * Tiles that lead to the side path (toward the cash area) are always safe.
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Money = require(script.Parent:WaitForChild("Money"))
+local remote = ReplicatedStorage:WaitForChild("GlassBridgeRemote")
+
+local REWARD = 100
+local REGROW_TIME = 30
+local REWARD_COOLDOWN = 20
+
+-- ======================= find the tiles =======================
+local folder
+for _, child in ipairs(workspace:GetChildren()) do
+	if child.Name:lower():gsub("^%s+", ""):gsub("%s+$", "") == "all tiles" then folder = child end
+end
+assert(folder, "GlassBridge: 'all tiles' folder not found")
+
+local function isCentre(p)
+	-- tiles are labelled in Studio: BridgeTile (main bridge) / SidePathTile (path to the cash area)
+	return p:IsA("BasePart") and (p:GetAttribute("BridgeTile") == true or p:GetAttribute("SidePathTile") == true)
+end
+
+local mainTiles, sideTiles = {}, {}
+for _, d in ipairs(folder:GetDescendants()) do
+	if isCentre(d) then
+		if math.abs(d.Position.X) <= 15 then
+			table.insert(mainTiles, d)
+		else
+			sideTiles[d] = true
+		end
+	end
+end
+
+local function leadsToSidePath(tile)
+	for _, d in ipairs(tile.Parent:GetDescendants()) do
+		if sideTiles[d] then return true end
+	end
+	return false
+end
+
+table.sort(mainTiles, function(a, b) return a.Position.Z > b.Position.Z end)
+local rows = {}
+for _, t in ipairs(mainTiles) do
+	local last = rows[#rows]
+	if last and math.abs(last[1].Position.Z - t.Position.Z) < 3 then
+		table.insert(last, t)
+	else
+		table.insert(rows, { t })
+	end
+end
+
+local function frameOf(tile)
+	local list = {}
+	for _, d in ipairs(tile.Parent:GetDescendants()) do
+		if d:IsA("BasePart") and not isCentre(d) then
+			local off = d.Position - tile.Position
+			local reach = math.max(tile.Size.X, tile.Size.Z) / 2 + 1.5
+			if d:GetAttribute("BridgeFrame") and math.abs(off.X) <= reach and math.abs(off.Z) <= reach and math.abs(off.Y) < 1 then
+				table.insert(list, d)
+			end
+		end
+	end
+	return list
+end
+
+Players.RespawnTime = 2 -- quick respawn after stepping on a wrong tile
+
+local info = {} -- [tile] = { correct, broken, frame = {parts}, transparency = {[part] = n} }
+local rng = Random.new()
+for _, row in ipairs(rows) do
+	local connector
+	for _, t in ipairs(row) do
+		if leadsToSidePath(t) then connector = t end
+	end
+	local safe = connector or row[rng:NextInteger(1, #row)]
+	for _, t in ipairs(row) do
+		t.CanTouch = true
+		local frame = frameOf(t)
+		local transparency = { [t] = t.Transparency }
+		for _, f in ipairs(frame) do transparency[f] = f.Transparency end
+		info[t] = { correct = (t == safe), broken = false, frame = frame, transparency = transparency }
+	end
+end
+
+-- ======================= tries (falls / deaths) =======================
+local rewardedThisTry = {} -- [player] = { [tile] = true }
+local lastPaid = {} -- [player] = { [tile] = time }
+
+local function newTry(player)
+	rewardedThisTry[player] = {}
+	remote:FireClient(player, "Reset")
+end
+
+local function setup(player)
+	lastPaid[player] = {}
+	rewardedThisTry[player] = {}
+	player.CharacterAdded:Connect(function() newTry(player) end)
+end
+Players.PlayerAdded:Connect(setup)
+for _, p in ipairs(Players:GetPlayers()) do setup(p) end
+Players.PlayerRemoving:Connect(function(player)
+	rewardedThisTry[player] = nil
+	lastPaid[player] = nil
+end)
+
+-- ======================= stepping on tiles =======================
+local function breakTile(tile)
+	local data = info[tile]
+	if data.broken then return end
+	data.broken = true
+	for part in pairs(data.transparency) do
+		part.CanCollide = false
+		part.Transparency = 1
+	end
+	remote:FireAllClients("Break", tile)
+	task.delay(REGROW_TIME, function()
+		data.broken = false
+		remote:FireAllClients("Restore", tile)
+		task.wait(0.55) -- let the pieces fly back into place on screens first
+		for part, t in pairs(data.transparency) do
+			part.Transparency = t
+			part.CanCollide = true
+		end
+	end)
+end
+
+local function correctStep(player, tile)
+	local try = rewardedThisTry[player]
+	if not try or try[tile] then return end
+	try[tile] = true
+	local paid = false
+	local now = os.clock()
+	local last = lastPaid[player][tile]
+	if not last or now - last >= REWARD_COOLDOWN then
+		lastPaid[player][tile] = now
+		Money.Add(player, REWARD)
+		paid = true
+	end
+	remote:FireClient(player, "Correct", tile, paid)
+end
+
+for tile, data in pairs(info) do
+	tile.Touched:Connect(function(hit)
+		local character = hit:FindFirstAncestorOfClass("Model")
+		local player = character and Players:GetPlayerFromCharacter(character)
+		if not player then return end
+		local humanoid = character:FindFirstChildOfClass("Humanoid")
+		if not humanoid or humanoid.Health <= 0 then return end
+		if data.correct then
+			correctStep(player, tile)
+		else
+			breakTile(tile)
+			local root = character:FindFirstChild("HumanoidRootPart")
+			if root then
+				root.AssemblyLinearVelocity = Vector3.new(0, -10, 0) -- just drop, no fling
+				root.AssemblyAngularVelocity = Vector3.zero
+			end
+			humanoid.Health = 0
+		end
+	end)
+end
+
+-- ======================= fall catcher =======================
+-- an invisible area under the whole bridge (and the side path + finish area):
+-- touching it sends you to the spawn plate instead of dying
+local spawnPad = workspace:FindFirstChildWhichIsA("SpawnLocation", true)
+local catcher = workspace:FindFirstChild("BridgeFallCatcher") or Instance.new("Part")
+catcher.Name = "BridgeFallCatcher"
+catcher.Anchored = true
+catcher.CanCollide = false
+catcher.CanQuery = false
+catcher.CanTouch = true
+catcher.Transparency = 1
+catcher.CastShadow = false
+-- covers x -130..35 and z -28..-645, a little below the bridge
+catcher.Size = Vector3.new(165, 8, 617)
+catcher.CFrame = CFrame.new(-47.5, -32, -336.5)
+catcher.Parent = workspace
+
+local catching = {}
+catcher.Touched:Connect(function(hit)
+	local character = hit:FindFirstAncestorOfClass("Model")
+	local player = character and Players:GetPlayerFromCharacter(character)
+	if not player or catching[player] then return end
+	local root = character:FindFirstChild("HumanoidRootPart")
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	if not root or not humanoid or humanoid.Health <= 0 then return end
+	catching[player] = true
+	-- put any flying carpet away first so its forces don't fight the teleport
+	humanoid:UnequipTools()
+	for _, name in ipairs({ "FlightSpin", "FlightPower", "FlightHold" }) do
+		local f = root:FindFirstChild(name)
+		if f then f:Destroy() end
+	end
+	root.AssemblyLinearVelocity = Vector3.zero
+	root.AssemblyAngularVelocity = Vector3.zero
+	if spawnPad then
+		root.CFrame = spawnPad.CFrame * CFrame.new(math.random(-4, 4), spawnPad.Size.Y / 2 + 4, math.random(-4, 4))
+	end
+	newTry(player)
+	remote:FireClient(player, "Caught")
+	task.delay(1, function() catching[player] = nil end)
+end)
+
+local safe = 0
+for _, d in pairs(info) do if d.correct then safe += 1 end end
+print(string.format("[GlassBridge] %d rows, %d safe tiles (new random pattern this server)", #rows, safe))
+]]></ProtectedString>
+			<bool name="Disabled">false</bool>
+			<Content name="LinkedSource"><null></null></Content>
+			<token name="RunContext">0</token>
+			<string name="ScriptGuid">{BFB82B97-73D2-4679-BEA2-51658111F037}</string>
+			<BinaryString name="AttributesSerialize"></BinaryString>
+			<SecurityCapabilities name="Capabilities">0</SecurityCapabilities>
+			<bool name="DefinesCapabilities">false</bool>
+			<string name="Name">GlassBridge</string>
+			<int64 name="SourceAssetId">-1</int64>
+			<SharedString name="Tags">yuZpQdnvvUBOTYh1jqZ2cA==</SharedString>
+		</Properties>
+	</Item>
+	<Item class="Script" referent="RBXDB4F591CE65D4F87B93A907812B7B97A">
+		<Properties>
+			<ProtectedString name="Source"><![CDATA[-- BridgeProgress (server)
+-- Works out how far along the glass bridge each player is (0 = start of the
+-- tiles, 1 = at the finish chest) and stores it on the player as the attribute
+-- "BridgeProgress". The progress bar at the top of the screen reads it.
+
+local Players = game:GetService("Players")
+
+local UPDATE_EVERY = 0.1
+
+-- start of the bridge: the tile closest to the spawn
+local tiles
+for _, child in ipairs(workspace:GetChildren()) do
+	if child.Name:lower():gsub("^%s+", ""):gsub("%s+$", "") == "all tiles" then tiles = child end
+end
+assert(tiles, "BridgeProgress: 'all tiles' folder not found")
+local startZ = -math.huge
+for _, d in ipairs(tiles:GetDescendants()) do
+	if d:IsA("BasePart") then startZ = math.max(startZ, d.Position.Z) end
+end
+
+-- end: just in front of the finish chest (where players stand to open it)
+local chest = workspace:WaitForChild("everything in finish area"):WaitForChild("finish line modals")
+	:WaitForChild("finish chest"):WaitForChild("Chest")
+local endZ = chest.Position.Z + 12
+
+local length = startZ - endZ -- the bridge runs toward -Z
+
+-- share the start/end with clients so they can place nearby players instantly
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+ReplicatedStorage:SetAttribute("BridgeStartZ", startZ)
+ReplicatedStorage:SetAttribute("BridgeEndZ", endZ)
+
+while true do
+	for _, player in ipairs(Players:GetPlayers()) do
+		local character = player.Character
+		local root = character and character:FindFirstChild("HumanoidRootPart")
+		if root then
+			local t = math.clamp((startZ - root.Position.Z) / length, 0, 1)
+			t = math.floor(t * 500 + 0.5) / 500 -- small steps only, so we don't spam updates
+			if player:GetAttribute("BridgeProgress") ~= t then
+				player:SetAttribute("BridgeProgress", t)
+			end
+		end
+	end
+	task.wait(UPDATE_EVERY)
+end
+]]></ProtectedString>
+			<bool name="Disabled">false</bool>
+			<Content name="LinkedSource"><null></null></Content>
+			<token name="RunContext">0</token>
+			<string name="ScriptGuid">{828F3C60-1D6A-4B09-BD44-12A2033F6996}</string>
+			<BinaryString name="AttributesSerialize"></BinaryString>
+			<SecurityCapabilities name="Capabilities">0</SecurityCapabilities>
+			<bool name="DefinesCapabilities">false</bool>
+			<string name="Name">BridgeProgress</string>
+			<int64 name="SourceAssetId">-1</int64>
+			<SharedString name="Tags">yuZpQdnvvUBOTYh1jqZ2cA==</SharedString>
+		</Properties>
+	</Item>
+	<Item class="Script" referent="RBXA08FB2A2CBE1443D88475E3F278B964D">
+		<Properties>
+			<ProtectedString name="Source"><![CDATA[-- AFKArea (server)
+-- Standing inside the AFK arena pays $5 every second.
+-- Players inside can't touch each other, and players outside can't push in,
+-- so nobody can be pushed out. Players inside get the attribute "InAFK" = true:
+-- a slap tool added later should ignore anyone with InAFK.
+
+local Players = game:GetService("Players")
+local PhysicsService = game:GetService("PhysicsService")
+local Money = require(script.Parent:WaitForChild("Money"))
+
+local PAY = 5 -- per second
+local CHECK_EVERY = 0.2
+
+-- the inside of the arena = the floor's footprint, from the floor up to the ceiling
+local arena = workspace:WaitForChild("afk arena")
+local floor = arena:WaitForChild("AFK base")
+local half = floor.Size / 2
+local MIN = Vector3.new(floor.Position.X - half.X, floor.Position.Y + half.Y - 1, floor.Position.Z - half.Z)
+local MAX = Vector3.new(floor.Position.X + half.X, floor.Position.Y + half.Y + 33, floor.Position.Z + half.Z)
+
+local function inside(pos)
+	return pos.X >= MIN.X and pos.X <= MAX.X and pos.Y >= MIN.Y and pos.Y <= MAX.Y and pos.Z >= MIN.Z and pos.Z <= MAX.Z
+end
+
+-- collision groups: everyone is "Players"; inside the arena you're "AFKPlayers",
+-- which touches nobody (inside or outside) but still stands on the floor
+pcall(function() PhysicsService:RegisterCollisionGroup("Players") end)
+pcall(function() PhysicsService:RegisterCollisionGroup("AFKPlayers") end)
+PhysicsService:CollisionGroupSetCollidable("AFKPlayers", "AFKPlayers", false)
+PhysicsService:CollisionGroupSetCollidable("AFKPlayers", "Players", false)
+
+local function setGroup(character, group)
+	for _, d in ipairs(character:GetDescendants()) do
+		if d:IsA("BasePart") then d.CollisionGroup = group end
+	end
+end
+
+local function onCharacter(player, character)
+	player:SetAttribute("InAFK", false)
+	setGroup(character, "Players")
+	-- accessories / tools that load later get the right group too
+	character.DescendantAdded:Connect(function(d)
+		if d:IsA("BasePart") then
+			d.CollisionGroup = player:GetAttribute("InAFK") and "AFKPlayers" or "Players"
+		end
+	end)
+end
+
+local function setup(player)
+	player:SetAttribute("InAFK", false)
+	player:SetAttribute("AFKEarned", 0)
+	player.CharacterAdded:Connect(function(c) onCharacter(player, c) end)
+	if player.Character then onCharacter(player, player.Character) end
+end
+Players.PlayerAdded:Connect(setup)
+for _, p in ipairs(Players:GetPlayers()) do setup(p) end
+
+-- who is inside? (checked often so the no-push rule kicks in right at the door)
+task.spawn(function()
+	while true do
+		for _, player in ipairs(Players:GetPlayers()) do
+			local character = player.Character
+			local root = character and character:FindFirstChild("HumanoidRootPart")
+			local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+			local now = root ~= nil and humanoid ~= nil and humanoid.Health > 0 and inside(root.Position)
+			if now ~= player:GetAttribute("InAFK") then
+				player:SetAttribute("InAFK", now)
+				if character then setGroup(character, now and "AFKPlayers" or "Players") end
+				if not now then player:SetAttribute("AFKEarned", 0) end
+			end
+		end
+		task.wait(CHECK_EVERY)
+	end
+end)
+
+-- pay everyone inside once per second
+while true do
+	task.wait(1)
+	for _, player in ipairs(Players:GetPlayers()) do
+		if player:GetAttribute("InAFK") then
+			Money.Add(player, PAY)
+			player:SetAttribute("AFKEarned", (player:GetAttribute("AFKEarned") or 0) + PAY)
+		end
+	end
+end
+]]></ProtectedString>
+			<bool name="Disabled">false</bool>
+			<Content name="LinkedSource"><null></null></Content>
+			<token name="RunContext">0</token>
+			<string name="ScriptGuid">{1DBF502B-2960-407F-B308-1255A0DAFE0C}</string>
+			<BinaryString name="AttributesSerialize"></BinaryString>
+			<SecurityCapabilities name="Capabilities">0</SecurityCapabilities>
+			<bool name="DefinesCapabilities">false</bool>
+			<string name="Name">AFKArea</string>
+			<int64 name="SourceAssetId">-1</int64>
+			<SharedString name="Tags">yuZpQdnvvUBOTYh1jqZ2cA==</SharedString>
+		</Properties>
+	</Item>
+	<SharedStrings>
+		<SharedString md5="yuZpQdnvvUBOTYh1jqZ2cA=="></SharedString>
+	</SharedStrings>
+</roblox>
