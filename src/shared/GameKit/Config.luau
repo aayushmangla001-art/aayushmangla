@@ -83,6 +83,18 @@ Config.Loading = {
 	},
 }
 
+-- Sound/visual effects added to the existing game (set to false to turn one off)
+Config.Effects = {
+	MoneyPopups = true, -- "+$100" text and a cash sound when money goes up
+	ButtonClicks = true, -- click sound on every button in the game
+	GlassBridge = true,
+	SpinWheel = true,
+	Portals = true,
+	Chests = true,
+	AFKArea = true,
+	Wins = true,
+}
+
 -- One look for every new menu
 Config.Theme = {
 	Font = Enum.Font.FredokaOne,

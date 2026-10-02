@@ -134,6 +134,7 @@ skip.Size = UDim2.fromScale(0.14, 0.07)
 skip.Position = UDim2.fromScale(0.5, 0.75)
 skip.BackgroundColor3 = Color3.fromRGB(60, 150, 255)
 skip.Text = ""
+skip:SetAttribute("ClickSfx", true)
 skip.Visible = false
 skip.Parent = canvas
 local skipRatio = Instance.new("UIAspectRatioConstraint")

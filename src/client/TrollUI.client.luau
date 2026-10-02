@@ -186,6 +186,7 @@ local function addRow(p: Player)
 	rowButton.AutoButtonColor = true
 	rowButton.Text = ""
 	rowButton.Size = UDim2.new(1, 0, 0, 48)
+	rowButton:SetAttribute("ClickSfx", true)
 	rowButton.BackgroundColor3 = Theme.Panel
 	UI.corner(rowButton, 10)
 	UI.stroke(rowButton, 2)

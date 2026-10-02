@@ -141,6 +141,7 @@ function UI.button(parent: Instance, text: string, color: Color3, onClick: (() -
 	b.BorderSizePixel = 0
 	b.Text = ""
 	b.Size = UDim2.fromOffset(160, 50)
+	b:SetAttribute("ClickSfx", true) -- plays its own click (Effects skips it)
 	UI.corner(b, 12)
 	UI.stroke(b, 3)
 	UI.shine(b)
