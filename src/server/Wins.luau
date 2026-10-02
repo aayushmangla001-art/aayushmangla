@@ -18,6 +18,11 @@ function Wins.Get(player)
 	return player:GetAttribute("Wins") or 0
 end
 
+-- true once the player's saved wins have loaded
+function Wins.IsLoaded(player)
+	return canSave[player] == true
+end
+
 local function save(player)
 	if not canSave[player] then return end
 	local value = Wins.Get(player)

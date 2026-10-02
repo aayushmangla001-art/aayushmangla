@@ -30,6 +30,11 @@ function Money.Get(player)
 	return player:GetAttribute("Money") or 0
 end
 
+-- true once the player's saved money has loaded
+function Money.IsLoaded(player)
+	return canSave[player] == true
+end
+
 function Money.Set(player, amount)
 	player:SetAttribute("Money", clean(amount))
 end
