@@ -1,0 +1,12 @@
+# Built place/model files
+*.rbxl
+*.rbxlx
+*.rbxm
+*.rbxmx
+*.lock
+
+# OS / editor junk
+.DS_Store
+Thumbs.db
+.vscode/
+sourcemap.json
