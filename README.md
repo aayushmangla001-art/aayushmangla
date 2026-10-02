@@ -8,12 +8,13 @@ device), then pulled into Studio and published whenever you're at your computer.
 
 | Folder         | Appears in Studio as                              | Use for                     |
 |----------------|---------------------------------------------------|-----------------------------|
-| `src/server/`  | `ServerScriptService.Server`                      | Server scripts              |
-| `src/client/`  | `StarterPlayer.StarterPlayerScripts.Client`       | LocalScripts                |
-| `src/shared/`  | `ReplicatedStorage.Shared`                        | ModuleScripts used by both  |
+| `src/server/`  | `ServerScriptService`                             | Server scripts              |
+| `src/client/`  | `StarterPlayer.StarterPlayerScripts`              | LocalScripts                |
+| `src/shared/`  | `ReplicatedStorage`                               | ModuleScripts used by both  |
 
-Only these three folders are managed by Rojo. Everything else in your place (maps,
-models, parts, GUIs built in Studio, other scripts) is left alone.
+Files are synced directly into those services. Anything already in the place that
+doesn't have a matching file (maps, models, GUIs, scripts not yet moved in) is left
+alone. Don't edit a synced script inside Studio — Rojo overwrites it from the files.
 
 ### File naming → script type
 
@@ -40,7 +41,6 @@ models, parts, GUIs built in Studio, other scripts) is left alone.
    file in the matching `src/` folder (using the naming rules above) and paste the script's
    code into it. Then delete the original from Studio so you don't have duplicates.
    Commit and push.
-5. You can delete the example `Hello` / `main` files once you have your own.
 
 ## Everyday workflow
 
