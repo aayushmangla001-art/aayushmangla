@@ -38,7 +38,7 @@ end
 
 -- ============================ glass bridge ============================
 if On.GlassBridge then
-	-- a big tick on every correct tile you step on (cleared when you fall or die)
+	-- a big tick on the first correct tile you step on (cleared when you fall or die)
 	local ticks: { [BasePart]: SurfaceGui } = {}
 	local function clearTicks()
 		for _, gui in pairs(ticks) do
@@ -47,8 +47,8 @@ if On.GlassBridge then
 		table.clear(ticks)
 	end
 	local function addTick(tile: BasePart)
-		if ticks[tile] then
-			return
+		if next(ticks) then
+			return -- only the first tile of each try gets a tick
 		end
 		local gui = Instance.new("SurfaceGui")
 		gui.Name = "CorrectTick"
