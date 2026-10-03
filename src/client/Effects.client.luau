@@ -38,8 +38,47 @@ end
 
 -- ============================ glass bridge ============================
 if On.GlassBridge then
+	-- a big tick on every correct tile you step on (cleared when you fall or die)
+	local ticks: { [BasePart]: SurfaceGui } = {}
+	local function clearTicks()
+		for _, gui in pairs(ticks) do
+			gui:Destroy()
+		end
+		table.clear(ticks)
+	end
+	local function addTick(tile: BasePart)
+		if ticks[tile] then
+			return
+		end
+		local gui = Instance.new("SurfaceGui")
+		gui.Name = "CorrectTick"
+		gui.Face = Enum.NormalId.Top
+		gui.Adornee = tile
+		gui.LightInfluence = 0
+		gui.AlwaysOnTop = false
+		local label = Instance.new("TextLabel")
+		label.BackgroundTransparency = 1
+		label.Size = UDim2.fromScale(1, 1)
+		label.Font = Theme.Font
+		label.Text = "✔"
+		label.TextScaled = true
+		label.TextColor3 = Color3.new(1, 1, 1)
+		local stroke = Instance.new("UIStroke")
+		stroke.Thickness = 6
+		stroke.Color = Color3.fromRGB(20, 120, 40)
+		stroke.Parent = label
+		label.Parent = gui
+		gui.Parent = playerGui
+		ticks[tile] = gui
+		Vfx.pop(label)
+	end
+
 	listen("GlassBridgeRemote", function(kind, tile, paid)
+		if kind == "Reset" or kind == "Caught" then
+			clearTicks()
+		end
 		if kind == "Correct" and typeof(tile) == "Instance" and tile:IsA("BasePart") then
+			addTick(tile)
 			local top = tile.Position + Vector3.new(0, tile.Size.Y / 2 + 0.5, 0)
 			Sfx.playAt("GlassSafe", top)
 			Vfx.burst(top, Theme.Green, paid and 18 or 8)
