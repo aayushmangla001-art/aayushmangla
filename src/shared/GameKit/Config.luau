@@ -38,6 +38,12 @@ Config.Troll = {
 	PushPower = 70,
 }
 
+-- Slap gloves: every glove hits the same, they're just different skins
+Config.Slap = {
+	Power = 40, -- how hard a slap knocks players back
+	Cooldown = 1, -- seconds between slaps
+}
+
 -- Invite friends
 Config.Invite = {
 	Reward = 2000,

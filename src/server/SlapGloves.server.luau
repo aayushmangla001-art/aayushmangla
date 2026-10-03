@@ -1,13 +1,21 @@
 -- SlapGloves (server)
 -- Makes every tool with the attribute "SlapPower" work as a slap glove.
 -- The tools themselves have no scripts; everything is checked here on the server.
---   SlapPower    = how hard the slap knocks players back
---   SlapCooldown = seconds between slaps
+-- Every glove hits the same (Config.Slap.Power / Cooldown); gloves are just skins.
 --   SlapColor    = colour of the hit sparks (Rainbow = true for rainbow sparks)
+-- The swing is a sideways slap, played on every player's screen (SlapSwing client).
 -- Players in the AFK area (attribute InAFK) can't slap or be slapped.
 
 local Players = game:GetService("Players")
 local Debris = game:GetService("Debris")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local GameKit = ReplicatedStorage:WaitForChild("GameKit")
+local Config = require(GameKit:WaitForChild("Config"))
+local Net = require(GameKit:WaitForChild("Net"))
+local swingRemote = Net.event("SlapSwing")
+local POWER = Config.Slap.Power
+local COOLDOWN = Config.Slap.Cooldown
 
 local RAINBOW = ColorSequence.new({
 	ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 60, 60)),
@@ -34,7 +42,7 @@ local function hitSparks(position, tool)
 	e.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.7), NumberSequenceKeypoint.new(1, 0) })
 	e.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 1) })
 	e.Parent = a
-	e:Emit(math.floor(12 + (tool:GetAttribute("SlapPower") or 40) / 4))
+	e:Emit(math.floor(12 + POWER / 4))
 	Debris:AddItem(a, 1)
 end
 
@@ -65,7 +73,7 @@ local function slap(player, character, tool)
 	if not root or not victim then return end
 	local vRoot = victim.HumanoidRootPart
 	local vHum = victim:FindFirstChildOfClass("Humanoid")
-	local power = tool:GetAttribute("SlapPower") or 40
+	local power = POWER
 	local dir = (vRoot.Position - root.Position) * Vector3.new(1, 0, 1)
 	dir = dir.Magnitude > 0.1 and dir.Unit or root.CFrame.LookVector
 	-- knock back (and a little up)
@@ -99,14 +107,10 @@ local function hook(tool)
 		local player = Players:GetPlayerFromCharacter(character)
 		if not player or player:GetAttribute("InAFK") then return end
 		local now = os.clock()
-		if now - last < (tool:GetAttribute("SlapCooldown") or 1) then return end
+		if now - last < COOLDOWN then return end
 		last = now
-		-- Roblox's built-in swing animation (works for every avatar and morph)
-		local anim = Instance.new("StringValue")
-		anim.Name = "toolanim"
-		anim.Value = "Slash"
-		anim.Parent = tool
-		Debris:AddItem(anim, 1)
+		-- sideways slap swing, animated on every player's screen
+		swingRemote:FireAllClients(character)
 		task.delay(0.12, function()
 			if tool.Parent == character then slap(player, character, tool) end
 		end)
