@@ -83,13 +83,13 @@ reviveRemote.OnClientEvent:Connect(function(kind, a, b)
 end)
 
 -- ============================ the three buttons ============================
-local _, root = UI.screen("BridgeButtons", 6)
+local buttonsGui, root = UI.screen("BridgeButtons", 6)
 local row = Instance.new("Frame")
 row.Name = "Row"
 row.BackgroundTransparency = 1
 row.AnchorPoint = Vector2.new(0.5, 0)
 row.Size = UDim2.fromOffset(500, 50)
-row.Position = UDim2.new(0.5, 0, 0, 70)
+row.Position = UDim2.new(0.5, 0, 0, 4)
 row.Parent = root
 local layout = Instance.new("UIListLayout")
 layout.FillDirection = Enum.FillDirection.Horizontal
@@ -141,13 +141,22 @@ task.spawn(function()
 		local bar = findProgressBar()
 		local s = scale and scale.Scale or 1
 		if bar then
-			local bottom = bar.AbsolutePosition.Y + bar.AbsoluteSize.Y + 8
+			-- use the same top-bar setting as the progress bar's screen, so both
+			-- measure from the same top edge (otherwise the buttons sit too low)
+			local barGui = bar:FindFirstAncestorWhichIsA("ScreenGui")
+			if barGui then
+				pcall(function()
+					buttonsGui.ScreenInsets = barGui.ScreenInsets
+				end)
+				buttonsGui.IgnoreGuiInset = barGui.IgnoreGuiInset
+			end
+			local bottom = bar.AbsolutePosition.Y + bar.AbsoluteSize.Y + Config.BridgePowers.ButtonGap
 			local centerX = bar.AbsolutePosition.X + bar.AbsoluteSize.X / 2
 			row.Position = UDim2.fromOffset(centerX / s, bottom / s)
 		else
-			row.Position = UDim2.new(0.5, 0, 0, 70)
+			row.Position = UDim2.new(0.5, 0, 0, 4)
 		end
-		task.wait(2)
+		task.wait(1)
 	end
 end)
 

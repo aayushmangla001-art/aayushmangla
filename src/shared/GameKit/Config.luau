@@ -28,6 +28,7 @@ Config.Revive = {
 -- Glass bridge buttons
 Config.BridgePowers = {
 	ShowPathSeconds = 180, -- how long the safe path stays revealed
+	ButtonGap = 2, -- space (pixels) between the progress bar and the buttons
 }
 
 -- Troll menu
